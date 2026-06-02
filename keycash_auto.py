@@ -2652,6 +2652,49 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def wait_for_game_ready_with_retry(
+    page: Page,
+    timeout: int,
+    stop_event: Optional[threading.Event],
+    game_url: str,
+    max_retries: int = 5,
+) -> bool:
+    """
+    Like wait_for_game_ready but navigates back to game_url and retries
+    up to max_retries times before giving up.  This prevents the automation
+    from stopping just because the page was briefly slow or redirected.
+    """
+    for attempt in range(1, max_retries + 1):
+        check_stop(stop_event)
+        if not page_is_usable(page):
+            return False
+
+        if wait_for_game_ready(page, timeout, stop_event, game_url):
+            return True
+
+        check_stop(stop_event)
+        if not page_is_usable(page):
+            return False
+
+        print(
+            f"Game not ready (attempt {attempt}/{max_retries}). "
+            f"Navigating back to {game_url} and retrying..."
+        )
+        try:
+            navigate_to_game(page, game_url, max(timeout, 45))
+        except Exception as exc:
+            if is_page_closed_error(exc):
+                return False
+            print(f"Re-navigation error: {exc}")
+
+        # Brief pause before next attempt so the page can settle.
+        if sleep_or_stop(2.0, stop_event):
+            return False
+
+    print(f"Game did not become ready after {max_retries} retries. Giving up.")
+    return False
+
+
 def navigate_to_game(page: Page, url: str, timeout: int) -> None:
     """Open the game URL, tolerating redirects and aborted loads on Keycash."""
     last_error: Optional[Exception] = None
@@ -2756,7 +2799,7 @@ def run_automation(
                         baseline_coins = report_automation_status(
                             page, question_count, status_callback, baseline_coins
                         )
-                        if not wait_for_game_ready(
+                        if not wait_for_game_ready_with_retry(
                             page, args.timeout, stop_event, args.url
                         ):
                             print("Stopping automation because the next question did not appear.")
@@ -2789,7 +2832,7 @@ def run_automation(
                         baseline_coins = report_automation_status(
                             page, question_count, status_callback, baseline_coins
                         )
-                        if not wait_for_game_ready(
+                        if not wait_for_game_ready_with_retry(
                             page, args.timeout, stop_event, args.url
                         ):
                             print("Stopping automation because the next question did not appear.")
